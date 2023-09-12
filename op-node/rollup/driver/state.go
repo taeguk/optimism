@@ -277,6 +277,7 @@ func (s *Driver) eventLoop() {
 				s.log.Error("Sequencer critical error", "err", err)
 				return
 			}
+			// TODO: Do this earlier
 			if s.network != nil && payload != nil {
 				// Publishing of unsafe data via p2p is optional.
 				// Errors are not severe enough to change/halt sequencing but should be logged and metered.

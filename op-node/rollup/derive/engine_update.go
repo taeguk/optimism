@@ -126,6 +126,7 @@ func ConfirmPayload(ctx context.Context, log log.Logger, eng Engine, fc eth.Fork
 	if err := sanityCheckPayload(payload); err != nil {
 		return nil, BlockInsertPayloadErr, err
 	}
+	// TODO: This is where we should be gossiping (in theory at least).
 
 	status, err := eng.NewPayload(ctx, payload)
 	if err != nil {
