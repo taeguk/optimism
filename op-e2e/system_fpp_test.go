@@ -284,8 +284,13 @@ func testFaultProofProgramScenario(t *testing.T, ctx context.Context, sys *Syste
 	// Check the FPP confirms the expected output
 	t.Log("Running fault proof in fetching mode")
 	log := testlog.Logger(t, log.LvlInfo)
-	err := opp.FaultProofProgram(ctx, log, fppConfig)
+	wait := make(chan error, 1)
+	stop, err := opp.FaultProofProgram(log, fppConfig, func(err error) {
+		wait <- err
+	})
 	require.NoError(t, err)
+	require.NoError(t, <-wait)
+	require.NoError(t, stop.Stop(context.Background()))
 
 	t.Log("Shutting down network")
 	// Shutdown the nodes from the actual chain. Should now be able to run using only the pre-fetched data.
@@ -301,18 +306,29 @@ func testFaultProofProgramScenario(t *testing.T, ctx context.Context, sys *Syste
 	// Should be able to rerun in offline mode using the pre-fetched images
 	fppConfig.L1URL = ""
 	fppConfig.L2URL = ""
-	err = opp.FaultProofProgram(ctx, log, fppConfig)
+	wait = make(chan error, 1)
+	stop, err = opp.FaultProofProgram(log, fppConfig, func(err error) {
+		wait <- err
+	})
 	require.NoError(t, err)
+	require.NoError(t, <-wait)
+	require.NoError(t, stop.Stop(context.Background()))
 
 	// Check that a fault is detected if we provide an incorrect claim
 	t.Log("Running fault proof with invalid claim")
 	fppConfig.L2Claim = common.Hash{0xaa}
-	err = opp.FaultProofProgram(ctx, log, fppConfig)
+	wait = make(chan error, 1)
+	stop, err = opp.FaultProofProgram(log, fppConfig, func(err error) {
+		wait <- err
+	})
+	require.NoError(t, err)
+	result := <-wait
 	if s.Detached {
-		require.Error(t, err, "exit status 1")
+		require.Error(t, result, "exit status 1")
 	} else {
-		require.ErrorIs(t, err, driver.ErrClaimNotValid)
+		require.ErrorIs(t, result, driver.ErrClaimNotValid)
 	}
+	require.ErrorIs(t, stop.Stop(context.Background()), driver.ErrClaimNotValid, "error is sticky on close")
 }
 
 func waitForSafeHead(ctx context.Context, safeBlockNum uint64, rollupClient *sources.RollupClient) error {
