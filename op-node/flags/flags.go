@@ -132,6 +132,13 @@ var (
 		Value:       "",
 		Destination: new(string),
 	}
+	CheckPointBlockHash = &cli.StringFlag{
+		Name:     "checkpoint.block",
+		Usage:    "experimental: Blockhash of a trusted block. This block will be finalized.", // TODO: Wording here.
+		EnvVars:  prefixEnvVars("CHECKPOINT_BLOCK"),
+		Required: false,
+		Value:    "",
+	}
 	VerifierL1Confs = &cli.Uint64Flag{
 		Name:     "verifier.l1-confs",
 		Usage:    "Number of L1 blocks to keep distance from the L1 head before deriving L2 data from. Reorgs are supported, but may be slow to perform.",
@@ -254,14 +261,6 @@ var (
 		Value:    false,
 		Hidden:   true,
 	}
-	SkipSyncStartCheck = &cli.BoolFlag{
-		Name: "l2.skip-sync-start-check",
-		Usage: "Skip sanity check of consistency of L1 origins of the unsafe L2 blocks when determining the sync-starting point. " +
-			"This defers the L1-origin verification, and is recommended to use in when utilizing l2.engine-sync",
-		EnvVars:  prefixEnvVars("L2_SKIP_SYNC_START_CHECK"),
-		Required: false,
-		Value:    false,
-	}
 	BetaExtraNetworks = &cli.BoolFlag{
 		Name:    "beta.extra-networks",
 		Usage:   "Legacy flag, ignored, all superchain-registry networks are enabled by default.",
@@ -310,6 +309,7 @@ var optionalFlags = []cli.Flag{
 	L1RPCMaxConcurrency,
 	L1HTTPPollInterval,
 	L2EngineJWTSecret,
+	CheckPointBlockHash,
 	VerifierL1Confs,
 	SequencerEnabledFlag,
 	SequencerStoppedFlag,
