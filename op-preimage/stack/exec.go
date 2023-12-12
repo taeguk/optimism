@@ -14,7 +14,7 @@ import (
 )
 
 func ExecSource(name string, stdOut, stdErr io.Writer, onComplete context.CancelCauseFunc) Source {
-	return Source(func() (preimageRW oppio.FileChannel, hintRW oppio.FileChannel, stop Stoppable, err error) {
+	return func() (preimageRW oppio.FileChannel, hintRW oppio.FileChannel, stop Stoppable, err error) {
 		pClientRW, pHostRW, hClientRW, hHostRW, stopPipe, err := MiddlewarePipes()
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to create pipes: %w", err)
@@ -28,11 +28,11 @@ func ExecSource(name string, stdOut, stdErr io.Writer, onComplete context.Cancel
 			return errors.Join(stopExec.Stop(ctx), stopPipe.Stop(ctx))
 		})
 		return pHostRW, hHostRW, stop, nil
-	})
+	}
 }
 
 func ExecSink(name string, stdOut, stdErr io.Writer, onComplete context.CancelCauseFunc) Sink {
-	return Sink(func(preimageRW oppio.FileChannel, hintRW oppio.FileChannel) (Stoppable, error) {
+	return func(preimageRW oppio.FileChannel, hintRW oppio.FileChannel) (Stoppable, error) {
 		cmd := exec.Command(name)
 		cmd.ExtraFiles = make([]*os.File, preimage.MaxFd-3) // not including stdin, stdout and stderr
 		cmd.ExtraFiles[preimage.HClientRFd-3] = hintRW.Reader()
@@ -90,5 +90,5 @@ func ExecSink(name string, stdOut, stdErr io.Writer, onComplete context.CancelCa
 				return err
 			}
 		}), nil
-	})
+	}
 }
