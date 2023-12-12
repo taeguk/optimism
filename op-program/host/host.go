@@ -237,7 +237,7 @@ func PreimageServer(ctx context.Context, logger log.Logger, cfg *config.Config, 
 
 	localPreimageSource := local.NewLocalPreimageSource(cfg)
 	splitter := kvstore.NewPreimageSourceSplitter(localPreimageSource.Get, getPreimage)
-	preimageGetter := splitter.Get
+	preimageGetter := preimage.WithVerification(splitter.Get)
 
 	var errGrp errgroup.Group
 	errGrp.Go(func() error {
