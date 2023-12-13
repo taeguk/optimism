@@ -124,31 +124,29 @@ func (b *BridgeProcessor) Close() error {
 // onL1Data will index new bridge events for the unvisited L1 state. As new L1 bridge events
 // are processed, bridge finalization events can be processed on L2 in this same window.
 func (b *BridgeProcessor) onL1Data() (errs error) {
-	done := b.metrics.RecordL1Interval()
+	// continue while unvisited state is available to process
+	for errs == nil &&
+		(b.LastL1Header == nil || b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time) ||
+		(b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.l1Etl.LatestHeader.Time) {
+		done := b.metrics.RecordL1Interval()
 
-	// Initiated L1 Events
-	if b.LastL1Header == nil || b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time {
-		if err := b.processInitiatedL1Events(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed processing initiated l1 events: %w", err))
+		// Initiated L1 Events
+		if b.LastL1Header == nil || b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time {
+			if err := b.processInitiatedL1Events(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed processing initiated l1 events: %w", err))
+			}
 		}
-	}
 
-	// Finalized L1 Events (on L2)
-	// NOTE: `LastFinalizedL2Header` and `LastL1Header` are mutated by the same
-	// routine and can safely be read without needing any sync primitives
-	if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
-		if err := b.processFinalizedL2Events(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed processing finalized l2 events: %w", err))
+		// Finalized L1 Events (on L2)
+		// NOTE: `LastFinalizedL2Header` and `LastL1Header` are mutated by the same
+		// routine and can safely be read without needing any sync primitives
+		if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
+			if err := b.processFinalizedL2Events(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed processing finalized l2 events: %w", err))
+			}
 		}
-	}
 
-	done(errs)
-
-	// recurse if there's more bridge data to process (syncing)
-	if errs == nil &&
-		(b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time ||
-			(b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.l1Etl.LatestHeader.Time)) {
-		return b.onL1Data()
+		done(errs)
 	}
 
 	return errs
@@ -161,31 +159,29 @@ func (b *BridgeProcessor) onL2Data() (errs error) {
 		return nil // skip genesis
 	}
 
-	done := b.metrics.RecordL2Interval()
+	// continue while unvisited state is available to process
+	for errs == nil &&
+		(b.LastL2Header == nil || b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time) ||
+		(b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.l2Etl.LatestHeader.Time) {
+		done := b.metrics.RecordL2Interval()
 
-	// Initiated L2 Events
-	if b.LastL2Header == nil || b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time {
-		if err := b.processInitiatedL2Events(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed processing initiated l2 events: %w", err))
+		// Initiated L2 Events
+		if b.LastL2Header == nil || b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time {
+			if err := b.processInitiatedL2Events(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed processing initiated l2 events: %w", err))
+			}
 		}
-	}
 
-	// Finalized L2 Events (on L1)
-	// NOTE: `LastFinalizedL1Header` and `LastL2Header` are mutated by the same
-	// routine and can safely be read without needing any sync primitives
-	if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
-		if err := b.processFinalizedL1Events(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed processing finalized l1 events: %w", err))
+		// Finalized L2 Events (on L1)
+		// NOTE: `LastFinalizedL1Header` and `LastL2Header` are mutated by the same
+		// routine and can safely be read without needing any sync primitives
+		if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
+			if err := b.processFinalizedL1Events(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed processing finalized l1 events: %w", err))
+			}
 		}
-	}
 
-	done(errs)
-
-	// recurse if there's more bridge data to process (syncing)
-	if errs == nil &&
-		(b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time ||
-			(b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.l2Etl.LatestHeader.Time)) {
-		return b.onL2Data()
+		done(errs)
 	}
 
 	return errs
