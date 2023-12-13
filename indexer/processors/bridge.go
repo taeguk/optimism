@@ -18,7 +18,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/tasks"
 )
 
-var blocksLimit = 10_000
+var blocksLimit = 5_000
 
 type BridgeProcessor struct {
 	log     log.Logger
@@ -88,13 +88,14 @@ func NewBridgeProcessor(log log.Logger, db *database.DB, metrics bridge.Metricer
 
 func (b *BridgeProcessor) Start() error {
 	b.log.Info("starting bridge processor...")
-
 	// start L1 worker
 	b.tasks.Go(func() error {
 		l1EtlUpdates := b.l1Etl.Notify()
 		for range l1EtlUpdates {
-			done := b.metrics.RecordL1Interval()
-			done(b.onL1Data())
+			b.log.Info("notified of new L1 state", "l1_etl_block_number", b.l1Etl.LatestHeader.Number)
+			if err := b.onL1Data(); err != nil {
+				b.log.Error("failed l1 bridge processing interval", "err", err)
+			}
 		}
 		b.log.Info("no more l1 etl updates. shutting down l1 task")
 		return nil
@@ -103,8 +104,10 @@ func (b *BridgeProcessor) Start() error {
 	b.tasks.Go(func() error {
 		l2EtlUpdates := b.l2Etl.Notify()
 		for range l2EtlUpdates {
-			done := b.metrics.RecordL2Interval()
-			done(b.onL2Data())
+			b.log.Info("notified of new L2 state", "l2_etl_block_number", b.l2Etl.LatestHeader.Number)
+			if err := b.onL2Data(); err != nil {
+				b.log.Error("failed l2 bridge processing interval", "err", err)
+			}
 		}
 		b.log.Info("no more l2 etl updates. shutting down l2 task")
 		return nil
@@ -113,31 +116,39 @@ func (b *BridgeProcessor) Start() error {
 }
 
 func (b *BridgeProcessor) Close() error {
-	// signal that we can stop any ongoing work
+	// signal that we can stop any ongoing work & wait for workers to stop
 	b.resourceCancel()
-	// await the work to stop
 	return b.tasks.Wait()
 }
 
 // onL1Data will index new bridge events for the unvisited L1 state. As new L1 bridge events
 // are processed, bridge finalization events can be processed on L2 in this same window.
-func (b *BridgeProcessor) onL1Data() error {
-	latestL1Header := b.l1Etl.LatestHeader
-	b.log.Info("notified of new L1 state", "l1_etl_block_number", latestL1Header.Number)
+func (b *BridgeProcessor) onL1Data() (errs error) {
+	done := b.metrics.RecordL1Interval()
 
-	var errs error
-	if err := b.processInitiatedL1Events(); err != nil {
-		b.log.Error("failed to process initiated L1 events", "err", err)
-		errs = errors.Join(errs, err)
+	// Initiated L1 Events
+	if b.LastL1Header == nil || b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time {
+		if err := b.processInitiatedL1Events(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed processing initiated l1 events: %w", err))
+		}
 	}
 
-	// `LastFinalizedL2Header` and `LastL1Header` are mutated by the same routine and can
-	// safely be read without needing any sync primitives
+	// Finalized L1 Events (on L2)
+	// NOTE: `LastFinalizedL2Header` and `LastL1Header` are mutated by the same
+	// routine and can safely be read without needing any sync primitives
 	if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
 		if err := b.processFinalizedL2Events(); err != nil {
-			b.log.Error("failed to process finalized L2 events", "err", err)
-			errs = errors.Join(errs, err)
+			errs = errors.Join(errs, fmt.Errorf("failed processing finalized l2 events: %w", err))
 		}
+	}
+
+	done(errs)
+
+	// recurse if there's more bridge data to process (syncing)
+	if errs == nil &&
+		(b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time ||
+			(b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.l1Etl.LatestHeader.Time)) {
+		errs = b.onL1Data()
 	}
 
 	return errs
@@ -145,25 +156,36 @@ func (b *BridgeProcessor) onL1Data() error {
 
 // onL2Data will index new bridge events for the unvisited L2 state. As new L2 bridge events
 // are processed, bridge finalization events can be processed on L1 in this same window.
-func (b *BridgeProcessor) onL2Data() error {
+func (b *BridgeProcessor) onL2Data() (errs error) {
 	if b.l2Etl.LatestHeader.Number.Cmp(bigint.Zero) == 0 {
 		return nil // skip genesis
 	}
-	b.log.Info("notified of new L2 state", "l2_etl_block_number", b.l2Etl.LatestHeader.Number)
 
-	var errs error
-	if err := b.processInitiatedL2Events(); err != nil {
-		b.log.Error("failed to process initiated L2 events", "err", err)
-		errs = errors.Join(errs, err)
+	done := b.metrics.RecordL2Interval()
+
+	// Initiated L2 Events
+	if b.LastL2Header == nil || b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time {
+		if err := b.processInitiatedL2Events(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed processing initiated l2 events: %w", err))
+		}
 	}
 
-	// `LastFinalizedL1Header` and `LastL2Header` are mutated by the same routine and can
-	// safely be read without needing any sync primitives
+	// Finalized L2 Events (on L1)
+	// NOTE: `LastFinalizedL1Header` and `LastL2Header` are mutated by the same
+	// routine and can safely be read without needing any sync primitives
 	if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
 		if err := b.processFinalizedL1Events(); err != nil {
-			b.log.Error("failed to process finalized L1 events", "err", err)
-			errs = errors.Join(errs, err)
+			errs = errors.Join(errs, fmt.Errorf("failed processing finalized l1 events: %w", err))
 		}
+	}
+
+	done(errs)
+
+	// recurse if there's more bridge data to process (syncing)
+	if errs == nil &&
+		(b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time ||
+			(b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.l2Etl.LatestHeader.Time)) {
+		errs = b.onL2Data()
 	}
 
 	return errs
