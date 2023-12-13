@@ -148,7 +148,7 @@ func (b *BridgeProcessor) onL1Data() (errs error) {
 	if errs == nil &&
 		(b.LastL1Header.Timestamp < b.l1Etl.LatestHeader.Time ||
 			(b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.l1Etl.LatestHeader.Time)) {
-		errs = b.onL1Data()
+		return b.onL1Data()
 	}
 
 	return errs
@@ -185,7 +185,7 @@ func (b *BridgeProcessor) onL2Data() (errs error) {
 	if errs == nil &&
 		(b.LastL2Header.Timestamp < b.l2Etl.LatestHeader.Time ||
 			(b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.l2Etl.LatestHeader.Time)) {
-		errs = b.onL2Data()
+		return b.onL2Data()
 	}
 
 	return errs
