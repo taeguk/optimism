@@ -30,6 +30,7 @@ const (
 var (
 	priceBumpPercent = big.NewInt(100 + priceBump)
 	oneHundred       = big.NewInt(100)
+	ErrClosed        = errors.New("transaction manager is closed")
 )
 
 // TxManager is an interface that allows callers to reliably publish txs,
@@ -104,6 +105,8 @@ type SimpleTxManager struct {
 	nonceLock sync.RWMutex
 
 	pending atomic.Int64
+
+	closed atomic.Bool
 }
 
 // NewSimpleTxManager initializes a new SimpleTxManager with the passed Config.
@@ -138,8 +141,11 @@ func (m *SimpleTxManager) BlockNumber(ctx context.Context) (uint64, error) {
 	return m.backend.BlockNumber(ctx)
 }
 
+// Close closes the underlying connection, and sets the closed flag.
+// once closed, the tx manager will refuse to send any new transactions, and may abandon pending ones.
 func (m *SimpleTxManager) Close() {
 	m.backend.Close()
+	m.closed.Store(true)
 }
 
 // TxCandidate is a transaction candidate that can be submitted to ask the
@@ -165,6 +171,10 @@ type TxCandidate struct {
 //
 // NOTE: Send can be called concurrently, the nonce will be managed internally.
 func (m *SimpleTxManager) Send(ctx context.Context, candidate TxCandidate) (*types.Receipt, error) {
+	// refuse new requests if the tx manager is closed
+	if m.closed.Load() {
+		return nil, ErrClosed
+	}
 	m.metr.RecordPendingTx(m.pending.Add(1))
 	defer func() {
 		m.metr.RecordPendingTx(m.pending.Add(-1))
@@ -328,6 +338,11 @@ func (m *SimpleTxManager) sendTx(ctx context.Context, tx *types.Transaction) (*t
 			if sendState.ShouldAbortImmediately() {
 				m.l.Warn("Aborting transaction submission")
 				return nil, errors.New("aborted transaction sending")
+			}
+			// if the tx manager closed while we were waiting for the tx, give up
+			if m.closed.Load() {
+				m.l.Warn("TxManager closed, aborting transaction submission")
+				return nil, ErrClosed
 			}
 			tx = publishAndWait(tx, true)
 
