@@ -19,7 +19,7 @@ import (
 )
 
 // Should implement derive.Engine
-var _ derive.Engine = (*OracleEngine)(nil)
+var _ derive.L2Source = (*OracleEngine)(nil)
 
 func TestPayloadByHash(t *testing.T) {
 	ctx := context.Background()

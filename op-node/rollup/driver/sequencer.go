@@ -34,7 +34,7 @@ type Sequencer struct {
 	log    log.Logger
 	config *rollup.Config
 
-	engine derive.ResettableEngineControl
+	engine derive.EngineControl // TODO: Create a new interface on top of EngineControl for the sequencer
 
 	attrBuilder      derive.AttributesBuilder
 	l1OriginSelector L1OriginSelectorIface
@@ -47,7 +47,7 @@ type Sequencer struct {
 	nextAction time.Time
 }
 
-func NewSequencer(log log.Logger, cfg *rollup.Config, engine derive.ResettableEngineControl, attributesBuilder derive.AttributesBuilder, l1OriginSelector L1OriginSelectorIface, metrics SequencerMetrics) *Sequencer {
+func NewSequencer(log log.Logger, cfg *rollup.Config, engine derive.EngineControl, attributesBuilder derive.AttributesBuilder, l1OriginSelector L1OriginSelectorIface, metrics SequencerMetrics) *Sequencer {
 	return &Sequencer{
 		log:              log,
 		config:           cfg,
@@ -213,7 +213,7 @@ func (d *Sequencer) RunNextSequencerAction(ctx context.Context) (*eth.ExecutionP
 				d.metrics.RecordSequencerReset()
 				d.nextAction = d.timeNow().Add(time.Second * time.Duration(d.config.BlockTime)) // hold off from sequencing for a full block
 				d.CancelBuildingBlock(ctx)
-				d.engine.Reset()
+				// d.engine.Reset() TODO: Why do we reset derivation on a sequencer error?
 			} else if errors.Is(err, derive.ErrTemporary) {
 				d.log.Error("sequencer failed temporarily to seal new block", "err", err)
 				d.nextAction = d.timeNow().Add(time.Second)
@@ -238,7 +238,7 @@ func (d *Sequencer) RunNextSequencerAction(ctx context.Context) (*eth.ExecutionP
 				d.log.Error("sequencer failed to seal new block, requiring derivation reset", "err", err)
 				d.metrics.RecordSequencerReset()
 				d.nextAction = d.timeNow().Add(time.Second * time.Duration(d.config.BlockTime)) // hold off from sequencing for a full block
-				d.engine.Reset()
+				// d.engine.Reset() TODO: Why do we reset derivation on a sequencer error?
 			} else if errors.Is(err, derive.ErrTemporary) {
 				d.log.Error("sequencer temporarily failed to start building new block", "err", err)
 				d.nextAction = d.timeNow().Add(time.Second)

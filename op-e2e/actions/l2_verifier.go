@@ -28,7 +28,7 @@ type L2Verifier struct {
 	log log.Logger
 
 	eng interface {
-		derive.Engine
+		derive.L2Source
 		L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 	}
 
@@ -49,7 +49,7 @@ type L2Verifier struct {
 }
 
 type L2API interface {
-	derive.Engine
+	derive.L2Source
 	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
 	// GetProof returns a proof of the account, it may return a nil result without error if the address was not found.

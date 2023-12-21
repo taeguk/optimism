@@ -24,7 +24,7 @@ type Derivation interface {
 }
 
 type L2Source interface {
-	derive.Engine
+	derive.L2Source
 	L2OutputRoot(uint64) (eth.Bytes32, error)
 }
 

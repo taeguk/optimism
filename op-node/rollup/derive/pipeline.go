@@ -32,31 +32,19 @@ type L1Fetcher interface {
 	L1TransactionFetcher
 }
 
-// ResettableEngineControl wraps EngineControl with reset-functionality,
-// which handles reorgs like the derivation pipeline:
-// by determining the last valid block references to continue from.
-type ResettableEngineControl interface {
-	EngineControl
-	Reset()
-}
-
 type ResettableStage interface {
 	// Reset resets a pull stage. `base` refers to the L1 Block Reference to reset to, with corresponding configuration.
 	Reset(ctx context.Context, base eth.L1BlockRef, baseCfg eth.SystemConfig) error
 }
 
 type EngineQueueStage interface {
-	EngineControl
-
 	FinalizedL1() eth.L1BlockRef
 	Finalized() eth.L2BlockRef
 	UnsafeL2Head() eth.L2BlockRef
 	SafeL2Head() eth.L2BlockRef
 	PendingSafeL2Head() eth.L2BlockRef
-	EngineSyncTarget() eth.L2BlockRef
 	Origin() eth.L1BlockRef
 	SystemConfig() eth.SystemConfig
-	SetUnsafeHead(head eth.L2BlockRef)
 
 	Finalize(l1Origin eth.L1BlockRef)
 	AddUnsafePayload(payload *eth.ExecutionPayload)
@@ -83,7 +71,7 @@ type DerivationPipeline struct {
 }
 
 // NewDerivationPipeline creates a derivation pipeline, which should be reset before use.
-func NewDerivationPipeline(log log.Logger, cfg *rollup.Config, l1Fetcher L1Fetcher, engine Engine, metrics Metrics, syncCfg *sync.Config) *DerivationPipeline {
+func NewDerivationPipeline(log log.Logger, cfg *rollup.Config, l1Fetcher L1Fetcher, engine L2Source, ee EngineControl, metrics Metrics, syncCfg *sync.Config) *DerivationPipeline {
 
 	// Pull stages
 	l1Traversal := NewL1Traversal(log, cfg, l1Fetcher)
@@ -97,7 +85,7 @@ func NewDerivationPipeline(log log.Logger, cfg *rollup.Config, l1Fetcher L1Fetch
 	attributesQueue := NewAttributesQueue(log, cfg, attrBuilder, batchQueue)
 
 	// Step stages
-	eng := NewEngineQueue(log, cfg, engine, metrics, attributesQueue, l1Fetcher, syncCfg)
+	eng := NewEngineQueue(log, cfg, engine, ee, metrics, attributesQueue, l1Fetcher, syncCfg)
 
 	// Reset from engine queue then up from L1 Traversal. The stages do not talk to each other during
 	// the reset, but after the engine queue, this is the order in which the stages could talk to each other.
@@ -157,26 +145,6 @@ func (dp *DerivationPipeline) PendingSafeL2Head() eth.L2BlockRef {
 // UnsafeL2Head returns the head of the L2 chain that we are deriving for, this may be past what we derived from L1
 func (dp *DerivationPipeline) UnsafeL2Head() eth.L2BlockRef {
 	return dp.eng.UnsafeL2Head()
-}
-
-func (dp *DerivationPipeline) EngineSyncTarget() eth.L2BlockRef {
-	return dp.eng.EngineSyncTarget()
-}
-
-func (dp *DerivationPipeline) StartPayload(ctx context.Context, parent eth.L2BlockRef, attrs *eth.PayloadAttributes, updateSafe bool) (errType BlockInsertionErrType, err error) {
-	return dp.eng.StartPayload(ctx, parent, attrs, updateSafe)
-}
-
-func (dp *DerivationPipeline) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPayload, errTyp BlockInsertionErrType, err error) {
-	return dp.eng.ConfirmPayload(ctx)
-}
-
-func (dp *DerivationPipeline) CancelPayload(ctx context.Context, force bool) error {
-	return dp.eng.CancelPayload(ctx, force)
-}
-
-func (dp *DerivationPipeline) BuildingPayload() (onto eth.L2BlockRef, id eth.PayloadID, safe bool) {
-	return dp.eng.BuildingPayload()
 }
 
 // AddUnsafePayload schedules an execution payload to be processed, ahead of deriving it from L1

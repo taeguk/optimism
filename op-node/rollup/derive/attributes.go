@@ -13,6 +13,14 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
+type AttributesType int
+
+const (
+	SingularBatchAttrs AttributesType = iota
+	SpanBatchMiddleAttrs
+	SpanBatchEndAttrs
+)
+
 // L1ReceiptsFetcher fetches L1 header info and receipts for the payload attributes derivation (the info tx and deposits)
 type L1ReceiptsFetcher interface {
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)

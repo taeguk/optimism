@@ -1,8 +1,11 @@
 package derive
 
-import "github.com/ethereum-optimism/optimism/op-service/testutils"
+import (
+	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
+)
 
-var _ Engine = (*testutils.MockEngine)(nil)
+var _ driver.L2Chain = (*testutils.MockEngine)(nil)
 
 var _ L1Fetcher = (*testutils.MockL1Source)(nil)
 

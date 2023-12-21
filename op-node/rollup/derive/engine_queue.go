@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -28,10 +27,25 @@ type NextAttributesProvider interface {
 	NextAttributes(context.Context, eth.L2BlockRef) (*AttributesWithParent, error)
 }
 
-type Engine interface {
+type BlockInsertionErrType uint
+
+const (
+	// BlockInsertOK indicates that the payload was successfully executed and appended to the canonical chain.
+	BlockInsertOK BlockInsertionErrType = iota
+	// BlockInsertTemporaryErr indicates that the insertion failed but may succeed at a later time without changes to the payload.
+	BlockInsertTemporaryErr
+	// BlockInsertPrestateErr indicates that the pre-state to insert the payload could not be prepared, e.g. due to missing chain data.
+	BlockInsertPrestateErr
+	// BlockInsertPayloadErr indicates that the payload was invalid and cannot become canonical.
+	BlockInsertPayloadErr
+)
+
+type L2Source interface {
+	// TODO: Remove the following interfaces
 	GetPayload(ctx context.Context, payloadId eth.PayloadID) (*eth.ExecutionPayload, error)
 	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload) (*eth.PayloadStatusV1, error)
+	// TODO: Keep the following, but rename it to be L2Source (read-only)
 	PayloadByHash(context.Context, common.Hash) (*eth.ExecutionPayload, error)
 	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayload, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
@@ -40,29 +54,24 @@ type Engine interface {
 	SystemConfigL2Fetcher
 }
 
-// EngineState provides a read-only interface of the forkchoice state properties of the L2 Engine.
-type EngineState interface {
-	Finalized() eth.L2BlockRef
-	UnsafeL2Head() eth.L2BlockRef
-	SafeL2Head() eth.L2BlockRef
-}
-
+// This is the new interface that derivation uses to control the execution engine
+// It is implemented by the driver.EngineController struct
 // EngineControl enables other components to build blocks with the Engine,
 // while keeping the forkchoice state and payload-id management internal to
 // avoid state inconsistencies between different users of the EngineControl.
 type EngineControl interface {
-	EngineState
+	// Local State Getters
+	UnsafeL2Head() eth.L2BlockRef
+	SafeL2Head() eth.L2BlockRef
+	PendingSafeL2Head() eth.L2BlockRef
+	Finalized() eth.L2BlockRef
 
-	// StartPayload requests the engine to start building a block with the given attributes.
-	// If updateSafe, the resulting block will be marked as a safe block.
-	StartPayload(ctx context.Context, parent eth.L2BlockRef, attrs *eth.PayloadAttributes, updateSafe bool) (errType BlockInsertionErrType, err error)
-	// ConfirmPayload requests the engine to complete the current block. If no block is being built, or if it fails, an error is returned.
-	ConfirmPayload(ctx context.Context) (out *eth.ExecutionPayload, errTyp BlockInsertionErrType, err error)
-	// CancelPayload requests the engine to stop building the current block without making it canonical.
-	// This is optional, as the engine expires building jobs that are left uncompleted, but can still save resources.
-	CancelPayload(ctx context.Context, force bool) error
-	// BuildingPayload indicates if a payload is being built, and onto which block it is being built, and whether or not it is a safe payload.
-	BuildingPayload() (onto eth.L2BlockRef, id eth.PayloadID, safe bool)
+	// V2 of Execution Controller APIs
+	InsertUnsafePayload(ctx context.Context, payload *eth.ExecutionPayload) error                               // TODO: Remove this as unsafe payloads are removed from derivation
+	InsertSafeAttributes(ctx context.Context, attributes *eth.PayloadAttributes, attrType AttributesType) error // TODO: derive, not driver. attributes type
+	UpdateSafeHead(ctx context.Context, safe eth.BlockID) error                                                 // Used while doing normal consolidation
+	UpdateFinalizedHead(ctx context.Context, finalized eth.BlockID) error                                       // Used while doing normal finalization
+	UpdateUnsafeAndSafeHeads(unsafe, safe eth.BlockID) error                                                    // Used when doing a rollback or reset
 }
 
 // Max memory used for buffering unsafe payloads
@@ -97,63 +106,34 @@ type FinalityData struct {
 
 // EngineQueue queues up payload attributes to consolidate or process with the provided Engine
 type EngineQueue struct {
-	log log.Logger
-	cfg *rollup.Config
+	log     log.Logger
+	metrics Metrics
 
-	finalized  eth.L2BlockRef
-	safeHead   eth.L2BlockRef
-	unsafeHead eth.L2BlockRef
+	// Config
+	cfg     *rollup.Config
+	sysCfg  eth.SystemConfig // only used for pipeline resets
+	syncCfg *sync.Config
 
-	// L2 block processed from the batch, but not consolidated to the safe block yet.
-	// Consolidation will be pending until the entire batch is processed successfully, to guarantee the span batch atomicity.
-	pendingSafeHead eth.L2BlockRef
-
-	// Target L2 block the engine is currently syncing to.
-	// If the engine p2p sync is enabled, it can be different with unsafeHead. Otherwise, it must be same with unsafeHead.
-	engineSyncTarget eth.L2BlockRef
-
-	buildingOnto eth.L2BlockRef
-	buildingID   eth.PayloadID
-	buildingSafe bool
-
-	// Track when the rollup node changes the forkchoice without engine action,
-	// e.g. on a reset after a reorg, or after consolidating a block.
-	// This update may repeat if the engine returns a temporary error.
-	needForkchoiceUpdate bool
-
-	// finalizedL1 is the currently perceived finalized L1 block.
-	// This may be ahead of the current traversed origin when syncing.
-	finalizedL1 eth.L1BlockRef
-
-	// triedFinalizeAt tracks at which origin we last tried to finalize during sync.
-	triedFinalizeAt eth.L1BlockRef
-
-	// The queued-up attributes
-	safeAttributes *AttributesWithParent
-	unsafePayloads *PayloadsQueue // queue of unsafe payloads, ordered by ascending block number, may have gaps and duplicates
-
-	// Tracks which L2 blocks where last derived from which L1 block. At most finalityLookback large.
-	finalityData []FinalityData
-
-	engine Engine
-	prev   NextAttributesProvider
-
-	origin eth.L1BlockRef   // updated on resets, and whenever we read from the previous stage.
-	sysCfg eth.SystemConfig // only used for pipeline resets
-
-	metrics   Metrics
+	ee        EngineControl
+	engine    L2Source
+	prev      NextAttributesProvider
 	l1Fetcher L1Fetcher
 
-	syncCfg *sync.Config
+	// Internal State
+	safeAttributes  *AttributesWithParent // The queued-up attributes
+	unsafePayloads  *PayloadsQueue        // queue of unsafe payloads, ordered by ascending block number, may have gaps and duplicates
+	finalizedL1     eth.L1BlockRef        // The currently perceived finalized L1 block. May be ahead of the current origin while syncing
+	triedFinalizeAt eth.L1BlockRef        // triedFinalizeAt tracks at which origin we last tried to finalize during sync.
+	finalityData    []FinalityData        // Tracks which L2 blocks where last derived from which L1 block. At most finalityLookback large.
+	origin          eth.L1BlockRef        // updated on resets, and whenever we read from the previous stage.
 }
 
-var _ EngineControl = (*EngineQueue)(nil)
-
 // NewEngineQueue creates a new EngineQueue, which should be Reset(origin) before use.
-func NewEngineQueue(log log.Logger, cfg *rollup.Config, engine Engine, metrics Metrics, prev NextAttributesProvider, l1Fetcher L1Fetcher, syncCfg *sync.Config) *EngineQueue {
+func NewEngineQueue(log log.Logger, cfg *rollup.Config, engine L2Source, ee EngineControl, metrics Metrics, prev NextAttributesProvider, l1Fetcher L1Fetcher, syncCfg *sync.Config) *EngineQueue {
 	return &EngineQueue{
 		log:            log,
 		cfg:            cfg,
+		ee:             ee,
 		engine:         engine,
 		metrics:        metrics,
 		finalityData:   make([]FinalityData, 0, finalityLookback),
@@ -171,16 +151,6 @@ func (eq *EngineQueue) Origin() eth.L1BlockRef {
 
 func (eq *EngineQueue) SystemConfig() eth.SystemConfig {
 	return eq.sysCfg
-}
-
-func (eq *EngineQueue) SetUnsafeHead(head eth.L2BlockRef) {
-	eq.unsafeHead = head
-	eq.metrics.RecordL2Ref("l2_unsafe", head)
-}
-
-func (eq *EngineQueue) SetEngineSyncTarget(head eth.L2BlockRef) {
-	eq.engineSyncTarget = head
-	eq.metrics.RecordL2Ref("l2_engineSyncTarget", head)
 }
 
 func (eq *EngineQueue) AddUnsafePayload(payload *eth.ExecutionPayload) {
@@ -222,41 +192,34 @@ func (eq *EngineQueue) Finalize(l1Origin eth.L1BlockRef) {
 	eq.log.Info("received L1 finality signal, but missing data for immediate L2 finalization", "prev_finalized_l1", eq.finalizedL1, "signaled_finalized_l1", l1Origin)
 }
 
+func (eq *EngineQueue) UnsafeL2Head() eth.L2BlockRef {
+	return eq.ee.UnsafeL2Head()
+}
+
+func (eq *EngineQueue) PendingSafeL2Head() eth.L2BlockRef {
+	return eq.ee.PendingSafeL2Head()
+}
+
+func (eq *EngineQueue) SafeL2Head() eth.L2BlockRef {
+	return eq.ee.SafeL2Head()
+}
+
+func (eq *EngineQueue) Finalized() eth.L2BlockRef {
+	return eq.ee.Finalized()
+}
+
 // FinalizedL1 identifies the L1 chain (incl.) that included and/or produced all the finalized L2 blocks.
 // This may return a zeroed ID if no finalization signals have been seen yet.
 func (eq *EngineQueue) FinalizedL1() eth.L1BlockRef {
 	return eq.finalizedL1
 }
 
-func (eq *EngineQueue) Finalized() eth.L2BlockRef {
-	return eq.finalized
-}
-
-func (eq *EngineQueue) UnsafeL2Head() eth.L2BlockRef {
-	return eq.unsafeHead
-}
-
-func (eq *EngineQueue) SafeL2Head() eth.L2BlockRef {
-	return eq.safeHead
-}
-
-func (eq *EngineQueue) PendingSafeL2Head() eth.L2BlockRef {
-	return eq.pendingSafeHead
-}
-
-func (eq *EngineQueue) EngineSyncTarget() eth.L2BlockRef {
-	return eq.engineSyncTarget
-}
-
 // Determine if the engine is syncing to the target block
 func (eq *EngineQueue) isEngineSyncing() bool {
-	return eq.unsafeHead.Hash != eq.engineSyncTarget.Hash
+	return false
 }
 
 func (eq *EngineQueue) Step(ctx context.Context) error {
-	if eq.needForkchoiceUpdate {
-		return eq.tryUpdateEngine(ctx)
-	}
 	// Trying unsafe payload should be done before safe attributes
 	// It allows the unsafe head can move forward while the long-range consolidation is in progress.
 	if eq.unsafePayloads.Len() > 0 {
@@ -284,14 +247,14 @@ func (eq *EngineQueue) Step(ctx context.Context) error {
 	if err := eq.tryFinalizePastL2Blocks(ctx); err != nil {
 		return err
 	}
-	if next, err := eq.prev.NextAttributes(ctx, eq.pendingSafeHead); err == io.EOF {
+	if next, err := eq.prev.NextAttributes(ctx, eq.PendingSafeL2Head()); err == io.EOF {
 		outOfData = true
 	} else if err != nil {
 		return err
 	} else {
 		eq.safeAttributes = next
-		eq.log.Debug("Adding next safe attributes", "safe_head", eq.safeHead,
-			"pending_safe_head", eq.pendingSafeHead, "next", next)
+		eq.log.Debug("Adding next safe attributes", "safe_head", eq.SafeL2Head(),
+			"pending_safe_head", eq.PendingSafeL2Head(), "next", next)
 		return NotEnoughData
 	}
 
@@ -309,7 +272,7 @@ func (eq *EngineQueue) verifyNewL1Origin(ctx context.Context, newOrigin eth.L1Bl
 	if newOrigin == eq.origin {
 		return nil
 	}
-	unsafeOrigin := eq.unsafeHead.L1Origin
+	unsafeOrigin := eq.UnsafeL2Head().L1Origin
 	if newOrigin.Number == unsafeOrigin.Number && newOrigin.ID() != unsafeOrigin {
 		return NewResetError(fmt.Errorf("l1 origin was inconsistent with l2 unsafe head origin, need reset to resolve: l1 origin: %v; unsafe origin: %v",
 			newOrigin.ID(), unsafeOrigin))
@@ -375,15 +338,15 @@ func (eq *EngineQueue) tryFinalizeL2() {
 	}
 	eq.triedFinalizeAt = eq.origin
 	// default to keep the same finalized block
-	finalizedL2 := eq.finalized
+	finalizedL2 := eq.Finalized()
 	// go through the latest inclusion data, and find the last L2 block that was derived from a finalized L1 block
 	for _, fd := range eq.finalityData {
 		if fd.L2Block.Number > finalizedL2.Number && fd.L1Block.Number <= eq.finalizedL1.Number {
 			finalizedL2 = fd.L2Block
-			eq.needForkchoiceUpdate = true
 		}
 	}
-	eq.finalized = finalizedL2
+	// TODO: Don't require FCU call when doing update finalized head
+	eq.ee.UpdateFinalizedHead(context.TODO(), finalizedL2.ID())
 	eq.metrics.RecordL2Ref("l2_finalized", finalizedL2)
 }
 
@@ -398,7 +361,7 @@ func (eq *EngineQueue) postProcessSafeL2() {
 	if len(eq.finalityData) == 0 || eq.finalityData[len(eq.finalityData)-1].L1Block.Number < eq.origin.Number {
 		// append entry for new L1 block
 		eq.finalityData = append(eq.finalityData, FinalityData{
-			L2Block: eq.safeHead,
+			L2Block: eq.SafeL2Head(),
 			L1Block: eq.origin.ID(),
 		})
 		last := &eq.finalityData[len(eq.finalityData)-1]
@@ -406,8 +369,8 @@ func (eq *EngineQueue) postProcessSafeL2() {
 	} else {
 		// if it's a new L2 block that was derived from the same latest L1 block, then just update the entry
 		last := &eq.finalityData[len(eq.finalityData)-1]
-		if last.L2Block != eq.safeHead { // avoid logging if there are no changes
-			last.L2Block = eq.safeHead
+		if last.L2Block != eq.SafeL2Head() { // avoid logging if there are no changes
+			last.L2Block = eq.SafeL2Head()
 			eq.log.Debug("updated finality-data", "last_l1", last.L1Block, "last_l2", last.L2Block)
 		}
 	}
@@ -416,83 +379,33 @@ func (eq *EngineQueue) postProcessSafeL2() {
 func (eq *EngineQueue) logSyncProgress(reason string) {
 	eq.log.Info("Sync progress",
 		"reason", reason,
-		"l2_finalized", eq.finalized,
-		"l2_safe", eq.safeHead,
-		"l2_safe_pending", eq.pendingSafeHead,
-		"l2_unsafe", eq.unsafeHead,
-		"l2_engineSyncTarget", eq.engineSyncTarget,
-		"l2_time", eq.unsafeHead.Time,
+		"l2_finalized", eq.Finalized(),
+		"l2_safe", eq.SafeL2Head(),
+		"l2_safe_pending", eq.PendingSafeL2Head(),
+		"l2_unsafe", eq.UnsafeL2Head(),
+		"l2_time", eq.UnsafeL2Head().Time,
 		"l1_derived", eq.origin,
 	)
-}
-
-// tryUpdateEngine attempts to update the engine with the current forkchoice state of the rollup node,
-// this is a no-op if the nodes already agree on the forkchoice state.
-func (eq *EngineQueue) tryUpdateEngine(ctx context.Context) error {
-	if eq.unsafeHead.Hash != eq.engineSyncTarget.Hash {
-		eq.log.Warn("Attempting to update forkchoice state while engine is P2P syncing")
-	}
-	fc := eth.ForkchoiceState{
-		HeadBlockHash:      eq.engineSyncTarget.Hash,
-		SafeBlockHash:      eq.safeHead.Hash,
-		FinalizedBlockHash: eq.finalized.Hash,
-	}
-	_, err := eq.engine.ForkchoiceUpdate(ctx, &fc, nil)
-	if err != nil {
-		var inputErr eth.InputError
-		if errors.As(err, &inputErr) {
-			switch inputErr.Code {
-			case eth.InvalidForkchoiceState:
-				return NewResetError(fmt.Errorf("forkchoice update was inconsistent with engine, need reset to resolve: %w", inputErr.Unwrap()))
-			default:
-				return NewTemporaryError(fmt.Errorf("unexpected error code in forkchoice-updated response: %w", err))
-			}
-		} else {
-			return NewTemporaryError(fmt.Errorf("failed to sync forkchoice with engine: %w", err))
-		}
-	}
-	eq.needForkchoiceUpdate = false
-	return nil
-}
-
-// checkNewPayloadStatus checks returned status of engine_newPayloadV1 request for next unsafe payload.
-// It returns true if the status is acceptable.
-func (eq *EngineQueue) checkNewPayloadStatus(status eth.ExecutePayloadStatus) bool {
-	if eq.syncCfg.SyncMode == sync.ELSync {
-		// Allow SYNCING and ACCEPTED if engine EL sync is enabled
-		return status == eth.ExecutionValid || status == eth.ExecutionSyncing || status == eth.ExecutionAccepted
-	}
-	return status == eth.ExecutionValid
-}
-
-// checkForkchoiceUpdatedStatus checks returned status of engine_forkchoiceUpdatedV1 request for next unsafe payload.
-// It returns true if the status is acceptable.
-func (eq *EngineQueue) checkForkchoiceUpdatedStatus(status eth.ExecutePayloadStatus) bool {
-	if eq.syncCfg.SyncMode == sync.ELSync {
-		// Allow SYNCING if engine P2P sync is enabled
-		return status == eth.ExecutionValid || status == eth.ExecutionSyncing
-	}
-	return status == eth.ExecutionValid
 }
 
 func (eq *EngineQueue) tryNextUnsafePayload(ctx context.Context) error {
 	first := eq.unsafePayloads.Peek()
 
-	if uint64(first.BlockNumber) <= eq.safeHead.Number {
-		eq.log.Info("skipping unsafe payload, since it is older than safe head", "safe", eq.safeHead.ID(), "unsafe", first.ID(), "payload", first.ID())
+	if uint64(first.BlockNumber) <= eq.SafeL2Head().Number {
+		eq.log.Info("skipping unsafe payload, since it is older than safe head", "safe", eq.SafeL2Head().ID(), "unsafe", first.ID(), "payload", first.ID())
 		eq.unsafePayloads.Pop()
 		return nil
 	}
-	if uint64(first.BlockNumber) <= eq.unsafeHead.Number {
-		eq.log.Info("skipping unsafe payload, since it is older than unsafe head", "unsafe", eq.unsafeHead.ID(), "unsafe_payload", first.ID())
+	if uint64(first.BlockNumber) <= eq.UnsafeL2Head().Number {
+		eq.log.Info("skipping unsafe payload, since it is older than unsafe head", "unsafe", eq.UnsafeL2Head().ID(), "unsafe_payload", first.ID())
 		eq.unsafePayloads.Pop()
 		return nil
 	}
 
 	// Ensure that the unsafe payload builds upon the current unsafe head
-	if eq.syncCfg.SyncMode != sync.ELSync && first.ParentHash != eq.unsafeHead.Hash {
-		if uint64(first.BlockNumber) == eq.unsafeHead.Number+1 {
-			eq.log.Info("skipping unsafe payload, since it does not build onto the existing unsafe chain", "safe", eq.safeHead.ID(), "unsafe", first.ID(), "payload", first.ID())
+	if eq.syncCfg.SyncMode != sync.ELSync && first.ParentHash != eq.UnsafeL2Head().Hash {
+		if uint64(first.BlockNumber) == eq.UnsafeL2Head().Number+1 {
+			eq.log.Info("skipping unsafe payload, since it does not build onto the existing unsafe chain", "safe", eq.SafeL2Head().ID(), "unsafe", first.ID(), "payload", first.ID())
 			eq.unsafePayloads.Pop()
 		}
 		return io.EOF // time to go to next stage if we cannot process the first unsafe payload
@@ -505,49 +418,53 @@ func (eq *EngineQueue) tryNextUnsafePayload(ctx context.Context) error {
 		return nil
 	}
 
-	status, err := eq.engine.NewPayload(ctx, first)
+	err = eq.ee.InsertUnsafePayload(ctx, first)
 	if err != nil {
-		return NewTemporaryError(fmt.Errorf("failed to update insert payload: %w", err))
-	}
-	if !eq.checkNewPayloadStatus(status.Status) {
-		eq.unsafePayloads.Pop()
-		return NewTemporaryError(fmt.Errorf("cannot process unsafe payload: new - %v; parent: %v; err: %w",
-			first.ID(), first.ParentID(), eth.NewPayloadErr(first, status)))
+		return err
 	}
 
-	// Mark the new payload as valid
-	fc := eth.ForkchoiceState{
-		HeadBlockHash:      first.BlockHash,
-		SafeBlockHash:      eq.safeHead.Hash, // this should guarantee we do not reorg past the safe head
-		FinalizedBlockHash: eq.finalized.Hash,
-	}
-	fcRes, err := eq.engine.ForkchoiceUpdate(ctx, &fc, nil)
-	if err != nil {
-		var inputErr eth.InputError
-		if errors.As(err, &inputErr) {
-			switch inputErr.Code {
-			case eth.InvalidForkchoiceState:
-				return NewResetError(fmt.Errorf("pre-unsafe-block forkchoice update was inconsistent with engine, need reset to resolve: %w", inputErr.Unwrap()))
-			default:
-				return NewTemporaryError(fmt.Errorf("unexpected error code in forkchoice-updated response: %w", err))
-			}
-		} else {
-			return NewTemporaryError(fmt.Errorf("failed to update forkchoice to prepare for new unsafe payload: %w", err))
-		}
-	}
-	if !eq.checkForkchoiceUpdatedStatus(fcRes.PayloadStatus.Status) {
-		eq.unsafePayloads.Pop()
-		return NewTemporaryError(fmt.Errorf("cannot prepare unsafe chain for new payload: new - %v; parent: %v; err: %w",
-			first.ID(), first.ParentID(), eth.ForkchoiceUpdateErr(fcRes.PayloadStatus)))
-	}
+	// status, err := eq.engine.NewPayload(ctx, first)
+	// if err != nil {
+	// 	return NewTemporaryError(fmt.Errorf("failed to update insert payload: %w", err))
+	// }
+	// if !eq.checkNewPayloadStatus(status.Status) {
+	// 	eq.unsafePayloads.Pop()
+	// 	return NewTemporaryError(fmt.Errorf("cannot process unsafe payload: new - %v; parent: %v; err: %w",
+	// 		first.ID(), first.ParentID(), eth.NewPayloadErr(first, status)))
+	// }
 
-	eq.engineSyncTarget = ref
-	eq.metrics.RecordL2Ref("l2_engineSyncTarget", ref)
-	// unsafeHead should be updated only if the payload status is VALID
-	if fcRes.PayloadStatus.Status == eth.ExecutionValid {
-		eq.unsafeHead = ref
-		eq.metrics.RecordL2Ref("l2_unsafe", ref)
-	}
+	// // Mark the new payload as valid
+	// fc := eth.ForkchoiceState{
+	// 	HeadBlockHash:      first.BlockHash,
+	// 	SafeBlockHash:      eq.SafeL2Head().Hash, // this should guarantee we do not reorg past the safe head
+	// 	FinalizedBlockHash: eq.finalized.Hash,
+	// }
+	// fcRes, err := eq.engine.ForkchoiceUpdate(ctx, &fc, nil)
+	// if err != nil {
+	// 	var inputErr eth.InputError
+	// 	if errors.As(err, &inputErr) {
+	// 		switch inputErr.Code {
+	// 		case eth.InvalidForkchoiceState:
+	// 			return NewResetError(fmt.Errorf("pre-unsafe-block forkchoice update was inconsistent with engine, need reset to resolve: %w", inputErr.Unwrap()))
+	// 		default:
+	// 			return NewTemporaryError(fmt.Errorf("unexpected error code in forkchoice-updated response: %w", err))
+	// 		}
+	// 	} else {
+	// 		return NewTemporaryError(fmt.Errorf("failed to update forkchoice to prepare for new unsafe payload: %w", err))
+	// 	}
+	// }
+	// if !eq.checkForkchoiceUpdatedStatus(fcRes.PayloadStatus.Status) {
+	// 	eq.unsafePayloads.Pop()
+	// 	return NewTemporaryError(fmt.Errorf("cannot prepare unsafe chain for new payload: new - %v; parent: %v; err: %w",
+	// 		first.ID(), first.ParentID(), eth.ForkchoiceUpdateErr(fcRes.PayloadStatus)))
+	// }
+
+	// eq.metrics.RecordL2Ref("l2_engineSyncTarget", ref)
+	// // unsafeHead should be updated only if the payload status is VALID
+	// if fcRes.PayloadStatus.Status == eth.ExecutionValid {
+	// 	eq.UnsafeL2Head() = ref
+	// 	eq.metrics.RecordL2Ref("l2_unsafe", ref)
+	// }
 	eq.unsafePayloads.Pop()
 	eq.log.Trace("Executed unsafe payload", "hash", ref.Hash, "number", ref.Number, "timestamp", ref.Time, "l1Origin", ref.L1Origin)
 	eq.logSyncProgress("unsafe payload from sequencer")
@@ -560,32 +477,31 @@ func (eq *EngineQueue) tryNextSafeAttributes(ctx context.Context) error {
 		return nil
 	}
 	// validate the safe attributes before processing them. The engine may have completed processing them through other means.
-	if eq.pendingSafeHead != eq.safeAttributes.parent {
+	if eq.PendingSafeL2Head() != eq.safeAttributes.parent {
 		// Previously the attribute's parent was the pending safe head. If the pending safe head advances so pending safe head's parent is the same as the
 		// attribute's parent then we need to cancel the attributes.
-		if eq.pendingSafeHead.ParentHash == eq.safeAttributes.parent.Hash {
+		if eq.PendingSafeL2Head().ParentHash == eq.safeAttributes.parent.Hash {
 			eq.log.Warn("queued safe attributes are stale, safehead progressed",
-				"pending_safe_head", eq.pendingSafeHead, "pending_safe_head_parent", eq.pendingSafeHead.ParentID(),
+				"pending_safe_head", eq.PendingSafeL2Head(), "pending_safe_head_parent", eq.PendingSafeL2Head().ParentID(),
 				"attributes_parent", eq.safeAttributes.parent)
 			eq.safeAttributes = nil
 			return nil
 		}
 		// If something other than a simple advance occurred, perform a full reset
 		return NewResetError(fmt.Errorf("pending safe head changed to %s with parent %s, conflicting with queued safe attributes on top of %s",
-			eq.pendingSafeHead, eq.pendingSafeHead.ParentID(), eq.safeAttributes.parent))
+			eq.PendingSafeL2Head(), eq.PendingSafeL2Head().ParentID(), eq.safeAttributes.parent))
 
 	}
-	if eq.pendingSafeHead.Number < eq.unsafeHead.Number {
+	if eq.PendingSafeL2Head().Number < eq.UnsafeL2Head().Number {
 		return eq.consolidateNextSafeAttributes(ctx)
-	} else if eq.pendingSafeHead.Number == eq.unsafeHead.Number {
+	} else if eq.PendingSafeL2Head().Number == eq.UnsafeL2Head().Number {
 		return eq.forceNextSafeAttributes(ctx)
 	} else {
 		// For some reason the unsafe head is behind the pending safe head. Log it, and correct it.
-		eq.log.Error("invalid sync state, unsafe head is behind pending safe head", "unsafe", eq.unsafeHead, "pending_safe", eq.pendingSafeHead)
-		eq.unsafeHead = eq.pendingSafeHead
-		eq.engineSyncTarget = eq.pendingSafeHead
-		eq.metrics.RecordL2Ref("l2_unsafe", eq.unsafeHead)
-		eq.metrics.RecordL2Ref("l2_engineSyncTarget", eq.unsafeHead)
+		eq.log.Error("invalid sync state, unsafe head is behind pending safe head", "unsafe", eq.UnsafeL2Head(), "pending_safe", eq.PendingSafeL2Head())
+		// TODO: How could we get here & how do we fix it???
+		eq.metrics.RecordL2Ref("l2_unsafe", eq.UnsafeL2Head())
+		eq.metrics.RecordL2Ref("l2_engineSyncTarget", eq.UnsafeL2Head())
 		return nil
 	}
 }
@@ -597,7 +513,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
-	payload, err := eq.engine.PayloadByNumber(ctx, eq.pendingSafeHead.Number+1)
+	payload, err := eq.engine.PayloadByNumber(ctx, eq.PendingSafeL2Head().Number+1)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
 			// engine may have restarted, or inconsistent safe head. We need to reset
@@ -605,8 +521,8 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 		}
 		return NewTemporaryError(fmt.Errorf("failed to get existing unsafe payload to compare against derived attributes from L1: %w", err))
 	}
-	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.pendingSafeHead.Hash, payload, eq.log); err != nil {
-		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1", "err", err, "unsafe", eq.unsafeHead, "pending_safe", eq.pendingSafeHead, "safe", eq.safeHead)
+	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.PendingSafeL2Head().Hash, payload, eq.log); err != nil {
+		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1", "err", err, "unsafe", eq.UnsafeL2Head(), "pending_safe", eq.PendingSafeL2Head(), "safe", eq.SafeL2Head())
 		// geth cannot wind back a chain without reorging to a new, previously non-canonical, block
 		return eq.forceNextSafeAttributes(ctx)
 	}
@@ -614,14 +530,17 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	if err != nil {
 		return NewResetError(fmt.Errorf("failed to decode L2 block ref from payload: %w", err))
 	}
-	eq.pendingSafeHead = ref
-	eq.metrics.RecordL2Ref("l2_pending_safe", ref)
-	if eq.safeAttributes.isLastInSpan {
-		eq.safeHead = ref
-		eq.needForkchoiceUpdate = true
-		eq.metrics.RecordL2Ref("l2_safe", ref)
-		eq.postProcessSafeL2()
-	}
+	// TODO: Need to also give the attributes type to update safe head
+	eq.ee.UpdateSafeHead(ctx, ref.ID())
+
+	// eq.PendingSafeL2Head() = ref
+	// eq.metrics.RecordL2Ref("l2_pending_safe", ref)
+	// if eq.safeAttributes.isLastInSpan {
+	// 	eq.SafeL2Head() = ref
+	// 	eq.needForkchoiceUpdate = true
+	// 	eq.metrics.RecordL2Ref("l2_safe", ref)
+	// 	eq.postProcessSafeL2()
+	// }
 	// unsafe head stays the same, we did not reorg the chain.
 	eq.safeAttributes = nil
 	eq.logSyncProgress("reconciled with L1")
@@ -635,142 +554,57 @@ func (eq *EngineQueue) forceNextSafeAttributes(ctx context.Context) error {
 		return nil
 	}
 	attrs := eq.safeAttributes.attributes
-	errType, err := eq.StartPayload(ctx, eq.pendingSafeHead, attrs, true)
-	if err == nil {
-		_, errType, err = eq.ConfirmPayload(ctx)
-	}
+	err := eq.ee.InsertSafeAttributes(ctx, attrs, 0)
 	if err != nil {
-		switch errType {
-		case BlockInsertTemporaryErr:
-			// RPC errors are recoverable, we can retry the buffered payload attributes later.
-			return NewTemporaryError(fmt.Errorf("temporarily cannot insert new safe block: %w", err))
-		case BlockInsertPrestateErr:
-			_ = eq.CancelPayload(ctx, true)
-			return NewResetError(fmt.Errorf("need reset to resolve pre-state problem: %w", err))
-		case BlockInsertPayloadErr:
-			_ = eq.CancelPayload(ctx, true)
-			eq.log.Warn("could not process payload derived from L1 data, dropping batch", "err", err)
-			// Count the number of deposits to see if the tx list is deposit only.
-			depositCount := 0
-			for _, tx := range attrs.Transactions {
-				if len(tx) > 0 && tx[0] == types.DepositTxType {
-					depositCount += 1
-				}
-			}
-			// Deposit transaction execution errors are suppressed in the execution engine, but if the
-			// block is somehow invalid, there is nothing we can do to recover & we should exit.
-			// TODO: Can this be triggered by an empty batch with invalid data (like parent hash or gas limit?)
-			if len(attrs.Transactions) == depositCount {
-				eq.log.Error("deposit only block was invalid", "parent", eq.safeAttributes.parent, "err", err)
-				return NewCriticalError(fmt.Errorf("failed to process block with only deposit transactions: %w", err))
-			}
-			// drop the payload without inserting it
-			eq.safeAttributes = nil
-			// Revert the pending safe head to the safe head.
-			eq.pendingSafeHead = eq.safeHead
-			// suppress the error b/c we want to retry with the next batch from the batch queue
-			// If there is no valid batch the node will eventually force a deposit only block. If
-			// the deposit only block fails, this will return the critical error above.
-			return nil
-
-		default:
-			return NewCriticalError(fmt.Errorf("unknown InsertHeadBlock error type %d: %w", errType, err))
-		}
+		return err
 	}
+
+	// errType, err := eq.StartPayload(ctx, eq.pendingSafeHead, attrs, true)
+	// if err == nil {
+	// 	_, errType, err = eq.ConfirmPayload(ctx)
+	// }
+	// if err != nil {
+	// 	switch errType {
+	// 	case BlockInsertTemporaryErr:
+	// 		// RPC errors are recoverable, we can retry the buffered payload attributes later.
+	// 		return NewTemporaryError(fmt.Errorf("temporarily cannot insert new safe block: %w", err))
+	// 	case BlockInsertPrestateErr:
+	// 		_ = eq.CancelPayload(ctx, true)
+	// 		return NewResetError(fmt.Errorf("need reset to resolve pre-state problem: %w", err))
+	// 	case BlockInsertPayloadErr:
+	// 		_ = eq.CancelPayload(ctx, true)
+	// 		eq.log.Warn("could not process payload derived from L1 data, dropping batch", "err", err)
+	// 		// Count the number of deposits to see if the tx list is deposit only.
+	// 		depositCount := 0
+	// 		for _, tx := range attrs.Transactions {
+	// 			if len(tx) > 0 && tx[0] == types.DepositTxType {
+	// 				depositCount += 1
+	// 			}
+	// 		}
+	// 		// Deposit transaction execution errors are suppressed in the execution engine, but if the
+	// 		// block is somehow invalid, there is nothing we can do to recover & we should exit.
+	// 		// TODO: Can this be triggered by an empty batch with invalid data (like parent hash or gas limit?)
+	// 		if len(attrs.Transactions) == depositCount {
+	// 			eq.log.Error("deposit only block was invalid", "parent", eq.safeAttributes.parent, "err", err)
+	// 			return NewCriticalError(fmt.Errorf("failed to process block with only deposit transactions: %w", err))
+	// 		}
+	// 		// drop the payload without inserting it
+	// 		eq.safeAttributes = nil
+	// 		// Revert the pending safe head to the safe head.
+	// 		eq.pendingSafeHead = eq.SafeL2Head()
+	// 		// suppress the error b/c we want to retry with the next batch from the batch queue
+	// 		// If there is no valid batch the node will eventually force a deposit only block. If
+	// 		// the deposit only block fails, this will return the critical error above.
+	// 		return nil
+
+	// 	default:
+	// 		return NewCriticalError(fmt.Errorf("unknown InsertHeadBlock error type %d: %w", errType, err))
+	// 	}
+	// }
 	eq.safeAttributes = nil
 	eq.logSyncProgress("processed safe block derived from L1")
 
 	return nil
-}
-
-func (eq *EngineQueue) StartPayload(ctx context.Context, parent eth.L2BlockRef, attrs *eth.PayloadAttributes, updateSafe bool) (errType BlockInsertionErrType, err error) {
-	if eq.isEngineSyncing() {
-		return BlockInsertTemporaryErr, fmt.Errorf("engine is in progess of p2p sync")
-	}
-	if eq.buildingID != (eth.PayloadID{}) {
-		eq.log.Warn("did not finish previous block building, starting new building now", "prev_onto", eq.buildingOnto, "prev_payload_id", eq.buildingID, "new_onto", parent)
-		// TODO: maybe worth it to force-cancel the old payload ID here.
-	}
-	fc := eth.ForkchoiceState{
-		HeadBlockHash:      parent.Hash,
-		SafeBlockHash:      eq.safeHead.Hash,
-		FinalizedBlockHash: eq.finalized.Hash,
-	}
-	id, errTyp, err := StartPayload(ctx, eq.engine, fc, attrs)
-	if err != nil {
-		return errTyp, err
-	}
-	eq.buildingID = id
-	eq.buildingSafe = updateSafe
-	eq.buildingOnto = parent
-	return BlockInsertOK, nil
-}
-
-func (eq *EngineQueue) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPayload, errTyp BlockInsertionErrType, err error) {
-	if eq.buildingID == (eth.PayloadID{}) {
-		return nil, BlockInsertPrestateErr, fmt.Errorf("cannot complete payload building: not currently building a payload")
-	}
-	if eq.buildingOnto.Hash != eq.unsafeHead.Hash { // E.g. when safe-attributes consolidation fails, it will drop the existing work.
-		eq.log.Warn("engine is building block that reorgs previous unsafe head", "onto", eq.buildingOnto, "unsafe", eq.unsafeHead)
-	}
-	fc := eth.ForkchoiceState{
-		HeadBlockHash:      common.Hash{}, // gets overridden
-		SafeBlockHash:      eq.safeHead.Hash,
-		FinalizedBlockHash: eq.finalized.Hash,
-	}
-	// Update the safe head if the payload is built with the last attributes in the batch.
-	updateSafe := eq.buildingSafe && eq.safeAttributes != nil && eq.safeAttributes.isLastInSpan
-	payload, errTyp, err := ConfirmPayload(ctx, eq.log, eq.engine, fc, eq.buildingID, updateSafe)
-	if err != nil {
-		return nil, errTyp, fmt.Errorf("failed to complete building on top of L2 chain %s, id: %s, error (%d): %w", eq.buildingOnto, eq.buildingID, errTyp, err)
-	}
-	ref, err := PayloadToBlockRef(payload, &eq.cfg.Genesis)
-	if err != nil {
-		return nil, BlockInsertPayloadErr, NewResetError(fmt.Errorf("failed to decode L2 block ref from payload: %w", err))
-	}
-
-	eq.unsafeHead = ref
-	eq.engineSyncTarget = ref
-	eq.metrics.RecordL2Ref("l2_unsafe", ref)
-	eq.metrics.RecordL2Ref("l2_engineSyncTarget", ref)
-
-	if eq.buildingSafe {
-		eq.pendingSafeHead = ref
-		if updateSafe {
-			eq.safeHead = ref
-			eq.postProcessSafeL2()
-			eq.metrics.RecordL2Ref("l2_safe", ref)
-		}
-	}
-	eq.resetBuildingState()
-	return payload, BlockInsertOK, nil
-}
-
-func (eq *EngineQueue) CancelPayload(ctx context.Context, force bool) error {
-	if eq.buildingID == (eth.PayloadID{}) { // only cancel if there is something to cancel.
-		return nil
-	}
-	// the building job gets wrapped up as soon as the payload is retrieved, there's no explicit cancel in the Engine API
-	eq.log.Error("cancelling old block sealing job", "payload", eq.buildingID)
-	_, err := eq.engine.GetPayload(ctx, eq.buildingID)
-	if err != nil {
-		eq.log.Error("failed to cancel block building job", "payload", eq.buildingID, "err", err)
-		if !force {
-			return err
-		}
-	}
-	eq.resetBuildingState()
-	return nil
-}
-
-func (eq *EngineQueue) BuildingPayload() (onto eth.L2BlockRef, id eth.PayloadID, safe bool) {
-	return eq.buildingOnto, eq.buildingID, eq.buildingSafe
-}
-
-func (eq *EngineQueue) resetBuildingState() {
-	eq.buildingID = eth.PayloadID{}
-	eq.buildingOnto = eth.L2BlockRef{}
-	eq.buildingSafe = false
 }
 
 // Reset walks the L2 chain backwards until it finds an L2 block whose L1 origin is canonical.
@@ -815,14 +649,8 @@ func (eq *EngineQueue) Reset(ctx context.Context, _ eth.L1BlockRef, _ eth.System
 		return NewTemporaryError(fmt.Errorf("failed to fetch L1 config of L2 block %s: %w", pipelineL2.ID(), err))
 	}
 	eq.log.Debug("Reset engine queue", "safeHead", safe, "unsafe", unsafe, "safe_timestamp", safe.Time, "unsafe_timestamp", unsafe.Time, "l1Origin", l1Origin)
-	eq.unsafeHead = unsafe
-	eq.engineSyncTarget = unsafe
-	eq.safeHead = safe
-	eq.pendingSafeHead = safe
-	eq.safeAttributes = nil
-	eq.finalized = finalized
-	eq.resetBuildingState()
-	eq.needForkchoiceUpdate = true
+	// TODO: How to check errors during this call
+	eq.ee.UpdateUnsafeAndSafeHeads(unsafe.ID(), safe.ID())
 	eq.finalityData = eq.finalityData[:0]
 	// note: finalizedL1 and triedFinalizeAt do not reset, since these do not change between reorgs.
 	// note: we do not clear the unsafe payloads queue; if the payloads are not applicable anymore the parent hash checks will clear out the old payloads.
@@ -830,7 +658,7 @@ func (eq *EngineQueue) Reset(ctx context.Context, _ eth.L1BlockRef, _ eth.System
 	eq.sysCfg = l1Cfg
 	eq.metrics.RecordL2Ref("l2_finalized", finalized)
 	eq.metrics.RecordL2Ref("l2_safe", safe)
-	eq.metrics.RecordL2Ref("l2_pending_safe", eq.pendingSafeHead)
+	eq.metrics.RecordL2Ref("l2_pending_safe", safe)
 	eq.metrics.RecordL2Ref("l2_unsafe", unsafe)
 	eq.metrics.RecordL2Ref("l2_engineSyncTarget", unsafe)
 	eq.logSyncProgress("reset derivation work")

@@ -46,26 +46,27 @@ type L1Chain interface {
 }
 
 type L2Chain interface {
-	derive.Engine
+	// Engine API
+	GetPayload(ctx context.Context, payloadId eth.PayloadID) (*eth.ExecutionPayload, error)
+	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
+	NewPayload(ctx context.Context, payload *eth.ExecutionPayload) (*eth.PayloadStatusV1, error)
+	// Fetchers
+	PayloadByHash(context.Context, common.Hash) (*eth.ExecutionPayload, error)
+	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayload, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error)
 	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
+	SystemConfigByL2Hash(ctx context.Context, hash common.Hash) (eth.SystemConfig, error)
 }
 
 type DerivationPipeline interface {
 	Reset()
 	Step(ctx context.Context) error
 	AddUnsafePayload(payload *eth.ExecutionPayload)
-	UnsafeL2SyncTarget() eth.L2BlockRef
 	Finalize(ref eth.L1BlockRef)
 	FinalizedL1() eth.L1BlockRef
-	Finalized() eth.L2BlockRef
-	SafeL2Head() eth.L2BlockRef
-	UnsafeL2Head() eth.L2BlockRef
-	PendingSafeL2Head() eth.L2BlockRef
 	Origin() eth.L1BlockRef
 	EngineReady() bool
-	EngineSyncTarget() eth.L2BlockRef
 }
 
 type L1StateIface interface {
@@ -118,14 +119,16 @@ type SequencerStateListener interface {
 
 // NewDriver composes an events handler that tracks L1 state, triggers L2 derivation, and optionally sequences new L2 blocks.
 func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 L2Chain, l1 L1Chain, altSync AltSync, network Network, log log.Logger, snapshotLog log.Logger, metrics Metrics, sequencerStateListener SequencerStateListener, syncCfg *sync.Config) *Driver {
+
 	l1 = NewMeteredL1Fetcher(l1, metrics)
 	l1State := NewL1State(log, metrics)
 	sequencerConfDepth := NewConfDepth(driverCfg.SequencerConfDepth, l1State.L1Head, l1)
 	findL1Origin := NewL1OriginSelector(log, cfg, sequencerConfDepth)
 	verifConfDepth := NewConfDepth(driverCfg.VerifierConfDepth, l1State.L1Head, l1)
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l2, metrics, syncCfg)
+	ee := NewEngineController(log, l2)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l2, ee, metrics, syncCfg)
 	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
-	engine := derivationPipeline
+	engine := NewEngineController(log, l2)
 	meteredEngine := NewMeteredEngine(cfg, engine, metrics, log)
 	sequencer := NewSequencer(log, cfg, meteredEngine, attrBuilder, findL1Origin, metrics)
 	driverCtx, driverCancel := context.WithCancel(context.Background())
