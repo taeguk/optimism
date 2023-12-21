@@ -290,7 +290,7 @@ contract Specification_Test is CommonTest {
         });
         _addSpec({
             _name: "L2OutputOracle",
-            _sel: _getSel("initialize(uint256,uint256)"),
+            _sel: _getSel("initialize(uint256,uint256,uint256,uint256,address,address,uint256)"),
             _auth: false,
             _pausable: false
         });
