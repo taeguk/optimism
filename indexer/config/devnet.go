@@ -68,5 +68,5 @@ func findDevnetAllocs(startDir string) (string, error) {
 		dir = parentDir
 	}
 
-	return "", fmt.Errorf(".devnet dir not found")
+	return "", fmt.Errorf(".devnet dir not found. `make devnet-allocs in monorepo root")
 }
