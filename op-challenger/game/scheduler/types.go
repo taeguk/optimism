@@ -24,3 +24,11 @@ type job struct {
 	player GamePlayer
 	status types.GameStatus
 }
+
+func newJob(addr common.Address, player GamePlayer, status types.GameStatus) *job {
+	return &job{
+		addr:   addr,
+		player: player,
+		status: status,
+	}
+}
