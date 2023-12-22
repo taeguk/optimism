@@ -18,6 +18,10 @@ contract L2CrossDomainMessenger is CrossDomainMessenger, ISemver {
     /// @custom:semver 1.9.0
     string public constant version = "1.9.0";
 
+    /// @notice Address of the paired CrossDomainMessenger contract on the other chain.
+    /// @custom:network-specific
+    address public override otherMessenger;
+
     /// @notice Constructs the L2CrossDomainMessenger contract.
     /// @param _l1CrossDomainMessenger Address of the L1CrossDomainMessenger contract on the other network.
     constructor(address _l1CrossDomainMessenger) CrossDomainMessenger() {
@@ -27,7 +31,8 @@ contract L2CrossDomainMessenger is CrossDomainMessenger, ISemver {
     /// @notice Initializer.
     /// @param _l1CrossDomainMessenger Address of the L1CrossDomainMessenger contract on the other network.
     function initialize(address _l1CrossDomainMessenger) public initializer {
-        __CrossDomainMessenger_init({ _otherMessenger: _l1CrossDomainMessenger });
+        otherMessenger = _l1CrossDomainMessenger;
+        __CrossDomainMessenger_init();
     }
 
     /// @custom:legacy

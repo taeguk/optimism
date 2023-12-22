@@ -140,10 +140,6 @@ abstract contract CrossDomainMessenger is
     ///         would be 1 plus a multiple of 50.
     uint256[44] private __gap;
 
-    /// @notice Address of the paired CrossDomainMessenger contract on the other chain.
-    /// @custom:network-specific
-    address public otherMessenger;
-
     /// @notice Emitted whenever a message is sent to the other chain.
     /// @param target       Address of the recipient of the message.
     /// @param sender       Address of the sender of the message.
@@ -179,7 +175,7 @@ abstract contract CrossDomainMessenger is
         // guarantee the property that the call to the target contract will always have at least
         // the minimum gas limit specified by the user.
         _sendMessage({
-            _to: otherMessenger,
+            _to: this.otherMessenger(),
             _gasLimit: baseGas(_message, _minGasLimit),
             _value: msg.value,
             _data: abi.encodeWithSelector(
@@ -313,12 +309,18 @@ abstract contract CrossDomainMessenger is
         return xDomainMsgSender;
     }
 
+    /// @notice Getter function of the address of the paired CrossDomainMessenger contract on the other chain.
+    /// @dev    The actual variable is stored in a child contract but accessed through this method, to preserve
+    ///         the existing storage layout when moving otherMessenger from immutable into storage.
+    /// @return Address of the paired CrossDomainMessenger contract on the other chain.
+    function otherMessenger() external view virtual returns (address);
+
     /// @notice Retrieves the address of the paired CrossDomainMessenger contract on the other chain
     ///         This will be removed in the future, use `otherMessenger()` instead.
     /// @return Address of the paired CrossDomainMessenger contract on the other chain.
     /// @custom:legacy
-    function OTHER_MESSENGER() public view returns (address) {
-        return otherMessenger;
+    function OTHER_MESSENGER() external view returns (address) {
+        return this.otherMessenger();
     }
 
     /// @notice Retrieves the next message nonce. Message version will be added to the upper two
@@ -356,10 +358,8 @@ abstract contract CrossDomainMessenger is
     }
 
     /// @notice Initializer.
-    /// @param _otherMessenger Address of the paired CrossDomainMessenger contract on the other
     // solhint-disable-next-line func-name-mixedcase
-    function __CrossDomainMessenger_init(address _otherMessenger) internal onlyInitializing {
-        otherMessenger = _otherMessenger;
+    function __CrossDomainMessenger_init() internal onlyInitializing {
         xDomainMsgSender = Constants.DEFAULT_L2_SENDER;
     }
 

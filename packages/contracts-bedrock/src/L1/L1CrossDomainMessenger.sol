@@ -24,6 +24,10 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, ISemver {
     /// @custom:network-specific
     OptimismPortal public portal;
 
+    /// @notice Address of the paired CrossDomainMessenger contract on the other chain.
+    /// @custom:network-specific
+    address public override otherMessenger;
+
     /// @notice Constructs the L1CrossDomainMessenger contract.
     constructor() CrossDomainMessenger() {
         initialize({
@@ -47,7 +51,8 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, ISemver {
     {
         superchainConfig = _superchainConfig;
         portal = _portal;
-        __CrossDomainMessenger_init({ _otherMessenger: _l2CrossDomainMessenger });
+        otherMessenger = _l2CrossDomainMessenger;
+        __CrossDomainMessenger_init();
     }
 
     /// @notice Getter function for the address of the OptimismPortal on this chain.
