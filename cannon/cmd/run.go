@@ -253,7 +253,6 @@ func Run(ctx *cli.Context) error {
 	}
 	defer func() {
 		if err := po.Close(); err != nil {
-			fmt.Printf("err: %v - T: %T\n", err, err)
 			l.Error("failed to close pre-image server", "err", err)
 		}
 	}()
