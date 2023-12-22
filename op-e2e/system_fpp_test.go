@@ -324,11 +324,12 @@ func testFaultProofProgramScenario(t *testing.T, ctx context.Context, sys *Syste
 	require.NoError(t, err)
 	result := <-wait
 	if s.Detached {
-		require.Error(t, result, "exit status 1")
+		require.ErrorContains(t, result, "exit status 1")
+		require.ErrorContains(t, stop.Stop(context.Background()), "already exited with non-zero exit code: 1")
 	} else {
 		require.ErrorIs(t, result, driver.ErrClaimNotValid)
+		require.ErrorIs(t, stop.Stop(context.Background()), driver.ErrClaimNotValid, "error is sticky on close")
 	}
-	require.ErrorIs(t, stop.Stop(context.Background()), driver.ErrClaimNotValid, "error is sticky on close")
 }
 
 func waitForSafeHead(ctx context.Context, safeBlockNum uint64, rollupClient *sources.RollupClient) error {
