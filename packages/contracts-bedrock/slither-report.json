@@ -1236,50 +1236,50 @@
     "filename_relative": "src/L1/OptimismPortal.sol"
   },
   {
-    "id": "baf2bfa9777021d9e36870b76a1020c950de67bbf00d486f604cc72d36c47839",
+    "id": "f0869070a62a2b5179d0943833b60dad6986db946fd3ff733900650fcd8d367f",
     "impact": "Medium",
     "confidence": "Medium",
     "check": "tx-origin",
-    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#207-302) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#275)\n",
+    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#203-298) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#271)\n",
     "type": "function",
     "name": "relayMessage",
-    "start": 10315,
+    "start": 10165,
     "length": 4822,
     "filename_relative": "src/universal/CrossDomainMessenger.sol"
   },
   {
-    "id": "baf2bfa9777021d9e36870b76a1020c950de67bbf00d486f604cc72d36c47839",
+    "id": "f0869070a62a2b5179d0943833b60dad6986db946fd3ff733900650fcd8d367f",
     "impact": "Medium",
     "confidence": "Medium",
     "check": "tx-origin",
-    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#207-302) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#275)\n",
+    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#203-298) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#271)\n",
     "type": "node",
     "name": "tx.origin == Constants.ESTIMATION_ADDRESS",
-    "start": 13912,
+    "start": 13762,
     "length": 41,
     "filename_relative": "src/universal/CrossDomainMessenger.sol"
   },
   {
-    "id": "f927c871fac745cb936a4cd6773c9129a178d2f8aa9b9479f3757eff7fcee8f6",
+    "id": "f65c9eb193761499945567c530e15544667fa6c33f4c2798c708d4cfa28912e5",
     "impact": "Medium",
     "confidence": "Medium",
     "check": "tx-origin",
-    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#207-302) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#298)\n",
+    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#203-298) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#294)\n",
     "type": "function",
     "name": "relayMessage",
-    "start": 10315,
+    "start": 10165,
     "length": 4822,
     "filename_relative": "src/universal/CrossDomainMessenger.sol"
   },
   {
-    "id": "f927c871fac745cb936a4cd6773c9129a178d2f8aa9b9479f3757eff7fcee8f6",
+    "id": "f65c9eb193761499945567c530e15544667fa6c33f4c2798c708d4cfa28912e5",
     "impact": "Medium",
     "confidence": "Medium",
     "check": "tx-origin",
-    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#207-302) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#298)\n",
+    "description": "CrossDomainMessenger.relayMessage(uint256,address,address,uint256,uint256,bytes) (src/universal/CrossDomainMessenger.sol#203-298) uses tx.origin for authorization: tx.origin == Constants.ESTIMATION_ADDRESS (src/universal/CrossDomainMessenger.sol#294)\n",
     "type": "node",
     "name": "tx.origin == Constants.ESTIMATION_ADDRESS",
-    "start": 14990,
+    "start": 14840,
     "length": 41,
     "filename_relative": "src/universal/CrossDomainMessenger.sol"
   },
@@ -1320,42 +1320,6 @@
     "filename_relative": "src/dispute/OutputBisectionGame.sol"
   },
   {
-    "id": "858b95108475bbb08343b6f5701b03c0762d00b73cec53751173e93c3ec10c1a",
-    "impact": "Medium",
-    "confidence": "High",
-    "check": "write-after-write",
-    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#282)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#284)\n",
-    "type": "variable",
-    "name": "xDomainMsgSender",
-    "start": 5649,
-    "length": 33,
-    "filename_relative": "src/universal/CrossDomainMessenger.sol"
-  },
-  {
-    "id": "858b95108475bbb08343b6f5701b03c0762d00b73cec53751173e93c3ec10c1a",
-    "impact": "Medium",
-    "confidence": "High",
-    "check": "write-after-write",
-    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#282)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#284)\n",
-    "type": "node",
-    "name": "xDomainMsgSender = _sender",
-    "start": 14084,
-    "length": 26,
-    "filename_relative": "src/universal/CrossDomainMessenger.sol"
-  },
-  {
-    "id": "858b95108475bbb08343b6f5701b03c0762d00b73cec53751173e93c3ec10c1a",
-    "impact": "Medium",
-    "confidence": "High",
-    "check": "write-after-write",
-    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#282)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#284)\n",
-    "type": "node",
-    "name": "xDomainMsgSender = Constants.DEFAULT_L2_SENDER",
-    "start": 14217,
-    "length": 46,
-    "filename_relative": "src/universal/CrossDomainMessenger.sol"
-  },
-  {
     "id": "aba76c5478a36b00ed8b66577c0cd1d3186109cf82c1767ce230c6fe72315c04",
     "impact": "Medium",
     "confidence": "High",
@@ -1390,5 +1354,41 @@
     "start": 17030,
     "length": 38,
     "filename_relative": "src/L1/OptimismPortal.sol"
+  },
+  {
+    "id": "b6c2f9aeccd2727b01a671b22e7830cf82365e1fcd3ec4ea4d6f2176c1390463",
+    "impact": "Medium",
+    "confidence": "High",
+    "check": "write-after-write",
+    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#278)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#280)\n",
+    "type": "variable",
+    "name": "xDomainMsgSender",
+    "start": 5649,
+    "length": 33,
+    "filename_relative": "src/universal/CrossDomainMessenger.sol"
+  },
+  {
+    "id": "b6c2f9aeccd2727b01a671b22e7830cf82365e1fcd3ec4ea4d6f2176c1390463",
+    "impact": "Medium",
+    "confidence": "High",
+    "check": "write-after-write",
+    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#278)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#280)\n",
+    "type": "node",
+    "name": "xDomainMsgSender = _sender",
+    "start": 13934,
+    "length": 26,
+    "filename_relative": "src/universal/CrossDomainMessenger.sol"
+  },
+  {
+    "id": "b6c2f9aeccd2727b01a671b22e7830cf82365e1fcd3ec4ea4d6f2176c1390463",
+    "impact": "Medium",
+    "confidence": "High",
+    "check": "write-after-write",
+    "description": "CrossDomainMessenger.xDomainMsgSender (src/universal/CrossDomainMessenger.sol#126) is written in both\n\txDomainMsgSender = _sender (src/universal/CrossDomainMessenger.sol#278)\n\txDomainMsgSender = Constants.DEFAULT_L2_SENDER (src/universal/CrossDomainMessenger.sol#280)\n",
+    "type": "node",
+    "name": "xDomainMsgSender = Constants.DEFAULT_L2_SENDER",
+    "start": 14067,
+    "length": 46,
+    "filename_relative": "src/universal/CrossDomainMessenger.sol"
   }
 ]
