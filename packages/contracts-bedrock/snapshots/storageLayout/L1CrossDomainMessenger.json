@@ -120,23 +120,23 @@
   },
   {
     "bytes": "20",
-    "label": "otherMessenger",
-    "offset": 0,
-    "slot": "251",
-    "type": "address"
-  },
-  {
-    "bytes": "20",
     "label": "superchainConfig",
     "offset": 0,
-    "slot": "252",
+    "slot": "251",
     "type": "contract SuperchainConfig"
   },
   {
     "bytes": "20",
     "label": "portal",
     "offset": 0,
-    "slot": "253",
+    "slot": "252",
     "type": "contract OptimismPortal"
+  },
+  {
+    "bytes": "20",
+    "label": "otherMessenger",
+    "offset": 0,
+    "slot": "253",
+    "type": "address"
   }
 ]
