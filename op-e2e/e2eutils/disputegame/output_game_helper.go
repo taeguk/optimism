@@ -208,7 +208,7 @@ func (g *OutputGameHelper) GetClaimValue(ctx context.Context, claimIdx int64) co
 
 func (g *OutputGameHelper) getAllClaims(ctx context.Context) []ContractClaim {
 	count := g.getClaimCount(ctx)
-	var claims []ContractClaim
+	claims := make([]ContractClaim, 0, count)
 	for i := int64(0); i < count; i++ {
 		claims = append(claims, g.getClaim(ctx, i))
 	}
